@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { SELF_READ } from '../services/studioQueries';
-import { AlertTriangle, Check, Cpu, FolderOpen, Loader2, RotateCw , Terminal } from 'lucide-react';
+import { AlertTriangle, Check, Cpu, Loader2, RotateCw , Terminal } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
 
 /**
@@ -68,29 +68,8 @@ export const EngineSettings: React.FC = () => {
   // page answers "did my change apply?" without opening the engine log.
   const [runtime, setRuntime] = useState<{ executable: string | null; executable_source: string; running_executable: string | null; engine_starting: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [picking, setPicking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // The native file picker belongs to the studio process: this window is a
-  // browser and cannot open one. Nothing is changed until the user saves,
-  // the same as every other field on this page.
-  const browseEngine = async () => {
-    setPicking(true);
-    setError(null);
-    try {
-      const response = await fetch('/engine/pick-executable', { method: 'POST' });
-      const body = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(body?.error || `Opening the file picker failed (${response.status})`);
-      if (body?.picked && typeof body.path === 'string') {
-        setOptions(current => ({ ...current, engine_bin: body.path }));
-      }
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Opening the file picker failed.');
-    } finally {
-      setPicking(false);
-    }
-  };
 
   const load = useCallback(async () => {
     try {
@@ -254,14 +233,6 @@ export const EngineSettings: React.FC = () => {
           className={`${CONTROL} mt-2 font-mono text-xs`}
         />
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void browseEngine()}
-            disabled={busy || picking}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700 hover:border-pink-400 hover:text-pink-600 disabled:opacity-50 dark:border-white/15 dark:text-zinc-200"
-          >
-            {picking ? <Loader2 size={13} className="animate-spin" /> : <FolderOpen size={13} />} {t('engineBinBrowse')}
-          </button>
           <button
             type="button"
             onClick={() => setOptions(current => ({ ...current, engine_bin: null }))}

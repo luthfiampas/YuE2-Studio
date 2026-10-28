@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI.git",
+  "commit": "81eed5e8f68b6bed1789f682fe78cdd324495afc",
+  "license": "MIT",
+  "requirements": "requirments_cu128_py312.txt",
+  "torch": "2.7.1+cu128",
+  "torchaudio": "2.7.1+cu128",
+  "note": "The filename's spelling is upstream's. Pinned to a commit, not a branch: the requirements are read from the checkout, so their content is fixed with it."
+}

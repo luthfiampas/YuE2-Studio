@@ -88,7 +88,7 @@ export function stackTheme(theme: HubTheme | null, index: number): HubTheme {
 export function hubView(view: string, settingsOpen: boolean): string {
   if (settingsOpen) return 'settings';
   if (view === 'library' || view === 'playlist' || view === 'search') return 'library';
-  if (view === 'tools' || view === 'adapters') return 'tools';
+  if (view === 'tools' || view === 'adapters' || view === 'misc') return 'tools';
   if (view === 'news') return 'news';
   return 'create';
 }

@@ -120,14 +120,14 @@ pub const ROFORMER_ENGINE: Asset = Asset {
     id: "bsroformer-engine",
     label: "BSRoformer.cpp (CUDA)",
     kind: AssetKind::Runtime,
-    url: "https://github.com/chenmozhijin/BSRoformer.cpp/releases/download/v0.1.0/BSRoformer-linux-cuda-13.1.0.tar.xz",
+    url: "https://github.com/chenmozhijin/BSRoformer.cpp/releases/download/v0.1.0/BSRoformer-linux-cuda-12.9.1.tar.xz",
     relative_path: "bsroformer-cuda.tar.xz",
-    bytes: 239_527_692,
+    bytes: 237_738_556,
     unzip_into: Some("bsroformer"),
     marker: "bs_roformer-cli",
     pick: &[],
     vram_gb: None,
-    note: "Runs Mel-Band RoFormer on an NVIDIA card.",
+    note: "Runs Mel-Band RoFormer on an NVIDIA card with CUDA 12.",
 };
 #[cfg(target_os = "linux")]
 pub const ROFORMER_ENGINE_CPU: Asset = Asset {

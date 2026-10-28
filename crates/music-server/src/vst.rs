@@ -95,29 +95,6 @@ impl VstHost {
         Ok(plugins)
     }
 
-    /// Opens a plugin's own window; closing it saves the settings into the
-    /// slot's state file. Returns the state id to keep with the slot.
-    pub fn open_editor(&self, path: &str, state_id: Option<String>) -> Result<String> {
-        if !self.plugins().unwrap_or_default().iter().any(|plugin| plugin.path == path) {
-            bail!("{path} is not one of the plugins the scan found");
-        }
-        let id = state_id.unwrap_or_else(|| uuid::Uuid::now_v7().simple().to_string());
-        let state = self.state_file(&id)?;
-        std::fs::create_dir_all(state.parent().context("state folder")?)?;
-        Command::new(&self.exe)
-            .arg("--gui")
-            .arg("--plugin")
-            .arg(path)
-            .arg("--state")
-            .arg(&state)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .with_context(|| format!("start {}", self.exe.display()))?;
-        Ok(id)
-    }
-
     /// Runs a track through the enabled plugins of a chain, in order.
     pub fn process(&self, audio: &Stereo, chain: &[VstSlot], work: &Path) -> Result<Stereo> {
         // only what the scan found in the system folders is loaded: a path from

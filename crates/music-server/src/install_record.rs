@@ -133,6 +133,11 @@ pub fn write(record: &Path, url: &str, sha256: &str, files: &[PathBuf], root: &P
         })
         .collect::<Result<Vec<_>>>()?;
     let body = serde_json::to_vec_pretty(&InstallRecord { sha256: sha256.to_string(), url: url.to_string(), files })?;
+    // The record goes beside the file it describes; the folder may not exist
+    // yet when a caller writes one for a path it has only just named.
+    if let Some(parent) = record.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
     let partial = record.with_extension("json.tmp");
     fs::write(&partial, body).with_context(|| format!("write {}", partial.display()))?;
     fs::rename(&partial, record).with_context(|| format!("write {}", record.display()))?;

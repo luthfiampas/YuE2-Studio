@@ -33,7 +33,14 @@ pub fn build_for(choice: &str) -> Result<Build> {
     }
     let hardware = crate::hardware::hardware();
     let card = match hardware.card_cuda {
-        Some(crate::hardware::CudaBuild::Cuda13) => Some(Build::Cuda13),
+        Some(crate::hardware::CudaBuild::Cuda13) => {
+            // Fall back to CUDA 12 on Linux if libcublas.so.13 is not present or has compatibility issues.
+            if cfg!(target_os = "linux") && !has_system_library("libcublas.so.13") {
+                Some(Build::Cuda12)
+            } else {
+                Some(Build::Cuda13)
+            }
+        }
         Some(crate::hardware::CudaBuild::Cuda12) => Some(Build::Cuda12),
         None if hardware.gpu_name.is_some() && !hardware.nvidia => Some(Build::Vulkan),
         None => None,
@@ -42,6 +49,19 @@ pub fn build_for(choice: &str) -> Result<Build> {
         "cpu" => Ok(Build::Cpu),
         "gpu" | "cuda" => card.ok_or_else(|| anyhow!("there is no graphics card here audio.cpp computes on (an NVIDIA card needs a driver that runs CUDA 12.9 or 13); choose Auto or the processor")),
         _ => Ok(card.unwrap_or(Build::Cpu)),
+    }
+}
+
+fn has_system_library(name: &str) -> bool {
+    #[cfg(unix)]
+    {
+        let listed = std::env::var_os("LD_LIBRARY_PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()));
+        let cached = std::fs::read("/etc/ld.so.cache").is_ok_and(|cache| cache.windows(name.len()).any(|bytes| bytes == name.as_bytes()));
+        listed || cached || ["/lib", "/usr/lib", "/usr/lib64", "/usr/lib/x86_64-linux-gnu", "/usr/local/cuda/lib64"].iter().any(|dir| std::path::Path::new(dir).join(name).is_file())
+    }
+    #[cfg(not(unix))]
+    {
+        false
     }
 }
 

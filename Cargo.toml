@@ -4,6 +4,7 @@ members = [
   "crates/music-server",
   "crates/music-engine",
   "crates/audio-post",
+  "crates/launcher",
 ]
 resolver = "2"
 
@@ -29,6 +30,7 @@ sha2 = "0.11"
 sysinfo = "0.39"
 rusqlite = { version = "0.40", features = ["bundled"] }
 thiserror = "2.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "signal", "fs", "io-util", "time", "process"] }
 tokio-stream = { version = "0.1", features = ["sync", "time"] }
 tower-http = { version = "0.7", features = ["cors", "trace", "fs", "set-header"] }

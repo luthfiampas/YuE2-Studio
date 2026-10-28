@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { openRouterSettingsChanged, SELF_READ } from '../services/studioQueries';
-import { Check, ChevronDown, Download, FolderDown, FolderOpen, Loader2, Square, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Download, Loader2, Square, Trash2, X } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
 import { DevicePicker, type Device } from './DevicePicker';
 import { ManualDownloads } from './ManualDownloads';
@@ -92,17 +92,6 @@ type OptionalStatus = {
 };
 
 const bytes = (value: number) => (value < 1024 ** 3 ? `${Math.round(value / 1024 ** 2)} MB` : `${(value / 1024 ** 3).toFixed(1)} GB`);
-
-/** A model file "use models I already have" left in the chosen folder, and why. */
-interface AdoptRefusal {
-  file: string;
-  kind: 'size' | 'unknown' | 'copy';
-  size?: number;
-  needs?: number;
-  repository?: string;
-  revision?: string;
-  error?: string;
-}
 
 const errorMessage = async (response: Response) => {
   const body = await response.json().catch(() => null);
@@ -745,9 +734,6 @@ export const SetupGate: React.FC<{ onReady?: () => void; mode?: 'first-run' | 's
   const [choice, setChoice] = useState<Record<string, string>>({});
   const chosenValues = useMemo(() => Object.values(choice).filter((id): id is string => typeof id === 'string' && id.length > 0), [choice]);
   const [error, setError] = useState<string | null>(null);
-  // what taking the user's own model folder did: files taken, copies made, what is still missing
-  const [adoptNote, setAdoptNote] = useState<string | null>(null);
-  const [adoptRefused, setAdoptRefused] = useState<AdoptRefusal[]>([]);
   // the training page's packs are listed here too, with everything else the studio downloads
   const [trainingInfo, setTrainingInfo] = useState<{ min_vram_gb: number; card_trains: boolean } | null>(null);
   useEffect(() => {
@@ -1097,55 +1083,6 @@ export const SetupGate: React.FC<{ onReady?: () => void; mode?: 'first-run' | 's
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{t('dataFolder')}</p>
                 <p className="mt-1 break-all font-mono text-[11px] text-zinc-600 dark:text-zinc-300">{status.data_directory}</p>
                 {status.portable && <p className="mt-1 text-[11px] leading-4 text-emerald-600 dark:text-emerald-300">{t('portableFolder')}</p>}
-                <button
-                  type="button"
-                  onClick={() => void fetch('/v1/open-data-directory', { method: 'POST' })}
-                  className="mt-2 inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-2 py-1 text-[11px] font-medium text-zinc-600 hover:border-pink-400 hover:text-pink-600 dark:border-white/15 dark:text-zinc-300"
-                >
-                  <FolderOpen size={13} />
-                  {t('openFolder')}
-                </button>
-                {/* Anyone who has run yue2.cpp by hand already has these files.
-                    Downloading ten gigabytes again to get them is a waste of a
-                    line and a disk. */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    void fetch('/setup/adopt', { method: 'POST' })
-                      .then(async (response) => (response.ok ? response.json() : Promise.reject(new Error(await errorMessage(response)))))
-                      .then(async (body: { picked?: boolean; adopted?: string[]; copied?: { id: string; bytes: number }[]; refused?: AdoptRefusal[] } | null) => {
-                        if (!body?.picked) return;
-                        setAdoptRefused(body.refused ?? []);
-                        const next = await refresh();
-                        const wanted = chosenIds ?? chosenValues;
-                        const missing = (catalog?.components ?? []).filter((component) => wanted.includes(component.id) && !next.installed_components.includes(component.id));
-                        const copiedBytes = (body.copied ?? []).reduce((sum, file) => sum + file.bytes, 0);
-                        setAdoptNote([
-                          t('adoptTaken').replace('{count}', String(body.adopted?.length ?? 0)),
-                          copiedBytes > 0 ? t('adoptCopied').replace('{size}', bytes(copiedBytes)) : '',
-                          missing.length > 0 ? t('adoptMissing').replace('{files}', missing.map((component) => `${component.filename} (${bytes(component.bytes)})`).join(', ')) : '',
-                        ].filter(Boolean).join(' '));
-                      })
-                      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
-                  }}
-                  className="ml-2 mt-2 inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-2 py-1 text-[11px] font-medium text-zinc-600 hover:border-pink-400 hover:text-pink-600 dark:border-white/15 dark:text-zinc-300"
-                >
-                  <FolderDown size={13} />
-                  {t('useExistingModels')}
-                </button>
-                {adoptNote && <p className="mt-2 text-[11px] leading-4 text-zinc-600 dark:text-zinc-300">{adoptNote}</p>}
-                {adoptRefused.map((refusal) => (
-                  <p key={refusal.file} className="mt-1 break-all text-[11px] leading-4 text-amber-600 dark:text-amber-300">
-                    <span className="font-mono">{refusal.file}</span> — {refusal.kind === 'size'
-                      ? t('adoptRefusedSize')
-                          .replace('{size}', (refusal.size ?? 0).toLocaleString())
-                          .replace('{needs}', (refusal.needs ?? 0).toLocaleString())
-                          .replace('{source}', `huggingface.co/${refusal.repository ?? ''} @ ${(refusal.revision ?? '').slice(0, 7)}`)
-                      : refusal.kind === 'copy'
-                        ? t('adoptRefusedCopy').replace('{error}', refusal.error ?? '')
-                        : t('adoptRefusedUnknown')}
-                  </p>
-                ))}
               </div>
             )}
           </div>

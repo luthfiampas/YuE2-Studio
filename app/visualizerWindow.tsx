@@ -1,7 +1,6 @@
 import './src-styles.css';
 import React, { useCallback, useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { I18nProvider, useI18n } from './context/I18nContext';
 import { receiveVisualizerFeed, type ReceivedFeed } from './services/visualizerFeed';
 import { VisualizerView } from './components/player/VisualizerView';
@@ -47,14 +46,17 @@ const Window: React.FC = () => {
 
   // the window follows the shared state: fullscreen, and closing when it is put elsewhere
   useEffect(() => {
-    const current = getCurrentWindow();
     let shown = visualizer().place === 'window';
     const unsubscribe = onVisualizer((state) => {
       if (state.place === 'window') shown = true;
-      else if (shown) void current.close();
-      void current.isFullscreen().then((now) => {
-        if (now !== state.fullscreen) void current.setFullscreen(state.fullscreen);
-      });
+      else if (shown) window.close();
+      if (state.fullscreen !== Boolean(document.fullscreenElement)) {
+        if (state.fullscreen) {
+          void document.documentElement.requestFullscreen?.().catch(() => {});
+        } else {
+          void document.exitFullscreen?.().catch(() => {});
+        }
+      }
     });
     const bye = () => {
       if (visualizer().place === 'window') setVisualizer({ place: 'closed', fullscreen: false });

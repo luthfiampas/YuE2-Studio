@@ -1,8 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { isDesktop } from '../../services/externalLinks';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { ChevronLeft, ChevronRight, ExternalLink, ListOrdered, Lock, LockOpen, Maximize2, Minimize2, Move, Shuffle, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListOrdered, Lock, LockOpen, Maximize2, Minimize2, Move, Shuffle, X } from 'lucide-react';
 import { useI18n } from '../../context/I18nContext';
 import { ensureAudioGraph, onAudioGraph, type AudioGraph } from '../../services/audioGraph';
 import { onVisualizer, setVisualizer, visualizer, visualizerCommand, type VisualizerEngine, type VisualizerState } from '../../services/visualizerState';
@@ -11,8 +8,7 @@ import { VisualizerView } from './VisualizerView';
 
 /**
  * The visualiser over the studio: a panel that is dragged by its title and
- * resized by its corner, goes fullscreen, or moves out into a window of its
- * own. It listens to the player after the equalizer.
+ * resized by its corner or goes fullscreen. It listens to the player after the equalizer.
  */
 
 const SIZE_KEY = 'studio:visualizer-size';
@@ -41,23 +37,9 @@ export function setVisualizerPanelSize(size: { width: number; height: number }):
   window.dispatchEvent(new CustomEvent('studio:visualizer-size'));
 }
 
-/** Opens the visualiser in its own window. */
+/** Opens the visualiser (kept on page for web). */
 export async function openVisualizerWindow(): Promise<void> {
-  // a browser has no second window of the studio: the visualiser stays in the page
-  if (!isDesktop()) {
-    setVisualizer({ place: 'panel' });
-    return;
-  }
-  const already = await WebviewWindow.getByLabel('visualizer');
-  await invoke('open_visualizer_window');
-  setVisualizer({ place: 'window' });
-  if (already) return;
-  // closed by its own frame, the window says nothing on its way out: its end is heard here
-  const opened = await WebviewWindow.getByLabel('visualizer');
-  if (!opened) throw new Error('The visualiser window did not open.');
-  await opened.once('tauri://destroyed', () => {
-    if (visualizer().place === 'window') setVisualizer({ place: 'closed', fullscreen: false });
-  });
+  setVisualizer({ place: 'panel' });
 }
 
 export const EngineTabs: React.FC = () => {
@@ -155,15 +137,6 @@ export const VisualizerPanel: React.FC = () => {
   const close = () => setVisualizer({ place: 'closed', fullscreen: false });
   const fullscreen = () => setVisualizer({ fullscreen: !visualizer().fullscreen });
 
-  const popOut = async () => {
-    setProblem(null);
-    try {
-      await openVisualizerWindow();
-    } catch (error) {
-      setProblem(error instanceof Error ? error.message : String(error));
-    }
-  };
-
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -202,9 +175,6 @@ export const VisualizerPanel: React.FC = () => {
           <EngineTabs />
           <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500" title={name}>{name}</span>
           <VisualizerControls onFullscreen={fullscreen} />
-          <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => void popOut()} title={t('vizPopOut')} className={button}>
-            <ExternalLink size={14} />
-          </button>
           <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={close} title={t('close')} className={button}>
             <X size={15} />
           </button>

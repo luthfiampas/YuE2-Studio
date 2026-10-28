@@ -115,6 +115,7 @@ import { UpdateScreen, readUpdatePlan } from './components/UpdateScreen';
 import { EngineStarting } from './components/EngineStarting';
 import { StudioOffline } from './components/StudioOffline';
 import { StudioToolsPanel } from './components/StudioToolsPanel';
+import { MiscPage } from './components/MiscPage';
 import { AdaptersPage } from './components/AdaptersPage';
 import { PlayerExtras } from './components/player/PlayerExtras';
 import { registerPlayer } from './services/audioGraph';
@@ -624,6 +625,12 @@ function AppContent() {
           setViewingPlaylistId(playlistId);
           setCurrentView('playlist');
         }
+      } else if (path === '/misc' || path.startsWith('/misc/')) {
+        setCurrentView('misc');
+      } else if (path === '/tools') {
+        setCurrentView('tools');
+      } else if (path === '/adapters') {
+        setCurrentView('adapters');
       } else if (path === '/search') {
         setCurrentView('search');
       } else if (path === '/news') {
@@ -970,7 +977,7 @@ function AppContent() {
   };
 
   // An agent connected over MCP works this window like a user
-  const VIEWS: View[] = ['create', 'library', 'tools', 'adapters', 'playlist', 'search', 'news'];
+  const VIEWS: View[] = ['create', 'library', 'tools', 'misc', 'adapters', 'playlist', 'search', 'news'];
   const songById = (id: unknown) => {
     const song = librarySongs.find(entry => entry.id === id);
     if (!song) throw new Error(`No song ${String(id)} in the library; library_songs_list gives the ids.`);
@@ -1312,7 +1319,7 @@ function AppContent() {
   // page shows: leaving it for the library used to throw away the style, the
   // lyrics, the score and every setting typed into it.
   const createKept = nativeModels !== 'offline' && nativeSetupReady;
-  const showingCreate = !['tools', 'adapters', 'library', 'playlist', 'search', 'news'].includes(currentView);
+  const showingCreate = !['tools', 'misc', 'adapters', 'library', 'playlist', 'search', 'news'].includes(currentView);
 
   // the details show the library's copy of the song, so a cover or a rename
   // made after it was opened appears there too
@@ -1346,6 +1353,9 @@ function AppContent() {
     switch (view) {
       case 'tools':
         return <StudioToolsPanel initialSongId={stemsSongId} />;
+
+      case 'misc':
+        return <MiscPage />;
 
       case 'adapters':
         return <AdaptersPage />;
@@ -1545,18 +1555,30 @@ function AppContent() {
           currentView={currentView}
           onNavigate={(v) => {
             setCurrentView(v);
-            if (v === 'create') {
-              setMobileShowList(false);
-              window.history.pushState({}, '', '/');
-            } else if (v === 'library') {
-              window.history.pushState({}, '', '/library');
-            } else if (v === 'search') {
-              window.history.pushState({}, '', '/search');
-            } else if (v === 'news') {
-              window.history.pushState({}, '', '/news');
-            } else if (v === 'tools') {
-              window.history.pushState({}, '', '/tools');
-            }
+            // Every page that has an address, so the notify below cannot put
+            // the previous view back: /adapters had none and its menu item was
+            // dead the moment a nested route existed.
+            const path =
+              v === 'create'
+                ? '/'
+                : v === 'library'
+                  ? '/library'
+                  : v === 'search'
+                    ? '/search'
+                    : v === 'news'
+                      ? '/news'
+                      : v === 'tools'
+                        ? '/tools'
+                        : v === 'adapters'
+                          ? '/adapters'
+                          : v === 'misc'
+                            ? '/misc/voice-swap'
+                            : null;
+            if (path) window.history.pushState({}, '', path);
+            if (v === 'create') setMobileShowList(false);
+            // pushState does not notify anyone; the page that owns a nested
+            // route (/misc/<tool>) reads it back from this.
+            window.dispatchEvent(new PopStateEvent('popstate'));
             if (isMobile) setShowLeftSidebar(false);
           }}
           theme={theme}

@@ -1,6 +1,3 @@
-import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { isDesktop } from './externalLinks';
-
 /** The interface scale, in per cent of the studio's own size. */
 export const UI_SCALE_MIN = 90;
 export const UI_SCALE_MAX = 150;
@@ -29,16 +26,11 @@ export function storedUiScale(): number {
 }
 
 /**
- * Scales the whole interface: the window's own page zoom in the desktop studio, which lays the page out again at
- * the new size as a browser's zoom does, and the page's zoom in a browser.
+ * Scales the whole interface using document zoom in the browser.
  */
 export async function applyUiScale(percent: number): Promise<void> {
   const factor = clampUiScale(percent) / 100;
-  if (isDesktop()) {
-    await getCurrentWebview().setZoom(factor);
-  } else {
-    document.documentElement.style.zoom = String(factor);
-  }
+  document.documentElement.style.zoom = String(factor);
 }
 
 /** Keeps and applies a scale, and tells the rest of the window. */

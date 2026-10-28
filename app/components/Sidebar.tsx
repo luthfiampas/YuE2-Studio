@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useOpenRouterSettings, useSetupStatus } from '../services/studioQueries';
-import { Disc, Layers, Library, Moon, Newspaper, ScrollText, Search, SlidersHorizontal, Sun } from 'lucide-react';
+import { Disc, Layers, Library, Moon, Newspaper, ScrollText, Search, SlidersHorizontal, Sun, Wrench } from 'lucide-react';
 import { View } from '../types';
 import { useI18n } from '../context/I18nContext';
 import { profileLabel } from '../services/modelCatalog';
@@ -105,7 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       <aside className={`fixed inset-y-0 left-0 z-50 flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-r border-zinc-200 bg-white py-4 transition-[width,transform] duration-300 dark:border-white/5 dark:bg-suno-sidebar md:relative md:inset-auto ${isOpen ? 'w-[min(20rem,calc(100vw-2.5rem))] md:w-[200px]' : 'w-[72px]'}`}>
-        <div className="mb-6 flex min-w-0 items-center justify-between gap-2 px-3">
+        <div className={`mb-6 flex min-w-0 gap-2 px-3 ${isOpen ? 'items-center justify-between' : 'flex-col items-center'}`}>
           <div className="flex min-w-0 items-center gap-3">
             {/* The studio mark: the application icon. */}
             <button type="button" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] shadow-lg transition-transform hover:scale-105" onClick={() => onNavigate('create')} title="YuE2 Studio">
@@ -116,7 +116,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {isOpen && (
               <span className="flex min-w-0 flex-col" title="YuE2 Studio">
                 <span className="text-[13px] font-bold leading-[1.15] text-zinc-900 dark:text-white">YuE2 Studio</span>
-                <span className="flex flex-wrap gap-x-1.5 text-[10px] font-medium leading-4 text-zinc-500 dark:text-zinc-400"><span>v{__APP_VERSION__}</span>{portable && <span>{t('portableEdition')}</span>}</span>
+                <span className="flex flex-wrap gap-x-1.5 text-[10px] font-medium leading-4 text-zinc-500 dark:text-zinc-400"><span>{__GIT_COMMIT__ || `v${__APP_VERSION__}`}</span>{portable && <span>{t('portableEdition')}</span>}</span>
               </span>
             )}
           </div>
@@ -131,31 +131,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         <nav className="flex min-h-0 w-full flex-1 flex-col gap-2 overflow-y-auto px-3 scrollbar-hide">
           <NavItem icon={<Disc size={20} />} label={t('create')} active={currentView === 'create'} onClick={() => onNavigate('create')} isExpanded={isOpen} />
-          <NavItem icon={<Library size={20} />} label={t('library')} active={currentView === 'library'} onClick={() => onNavigate('library')} isExpanded={isOpen} />
-          <NavItem icon={<Search size={20} />} label={t('search')} active={currentView === 'search'} onClick={() => onNavigate('search')} isExpanded={isOpen} />
           <NavItem icon={<Layers size={20} />} label={t('adaptersNav')} active={currentView === 'adapters'} onClick={() => onNavigate('adapters')} isExpanded={isOpen} />
           <NavItem icon={<SlidersHorizontal size={20} />} label={t('studioTools')} active={currentView === 'tools'} onClick={() => onNavigate('tools')} isExpanded={isOpen} />
-          <NavItem icon={<Newspaper size={20} />} label={t('news')} active={currentView === 'news'} onClick={() => onNavigate('news')} isExpanded={isOpen} />
-          {onToggleJournal && <NavItem icon={<ScrollText size={20} />} label={t('journal')} active={journalOpen} opens={journalOpen} onClick={onToggleJournal} isExpanded={isOpen} />}
+          <NavItem icon={<Wrench size={20} />} label={t('misc')} active={currentView === 'misc'} onClick={() => onNavigate('misc')} isExpanded={isOpen} />
+          <button type="button" onClick={onOpenSettings} className={`flex w-full items-center gap-3 rounded-xl text-zinc-500 transition-all duration-200 hover:bg-zinc-100 hover:text-black dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-white ${isOpen ? 'justify-start px-3 py-2.5' : 'aspect-square justify-center'}`} title={`${user.username} - ${t('settings')}`}>
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-linear-to-br from-pink-500 to-purple-600 text-[10px] font-bold text-white">{user.username.charAt(0).toUpperCase()}</span>
+            {isOpen && <span className="min-w-0 flex-1 truncate text-left text-sm font-medium">{user.username}</span>}
+          </button>
 
-          <div className="mt-auto flex flex-col gap-2">
+          <div className="mt-auto flex max-h-[45vh] shrink-0 flex-col gap-2 overflow-y-auto [&>*]:shrink-0">
             {/* the files panel docks its chip here */}
             <div id="dock-slot" className="flex flex-col" />
             {/* the player's extras, also when no song is loaded and the player bar is away */}
             <div className={isOpen ? 'flex flex-col gap-1' : 'flex flex-col gap-2'}>
               <PlayerExtraButtons layout={isOpen ? 'list' : 'rail'} />
             </div>
-            <ResourceMonitor isOpen={isOpen} />
-            <SystemWidget isOpen={isOpen} />
+            <NavItem icon={<Library size={20} />} label={t('library')} active={currentView === 'library'} onClick={() => onNavigate('library')} isExpanded={isOpen} />
+            <NavItem icon={<Search size={20} />} label={t('search')} active={currentView === 'search'} onClick={() => onNavigate('search')} isExpanded={isOpen} />
+            <NavItem icon={<Newspaper size={20} />} label={t('news')} active={currentView === 'news'} onClick={() => onNavigate('news')} isExpanded={isOpen} />
+            {onToggleJournal && <NavItem icon={<ScrollText size={20} />} label={t('journal')} active={journalOpen} opens={journalOpen} onClick={onToggleJournal} isExpanded={isOpen} />}
             <button type="button" onClick={onToggleTheme} className={`flex w-full items-center gap-3 rounded-xl text-zinc-500 transition-all duration-200 hover:bg-zinc-100 hover:text-black dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-white ${isOpen ? 'justify-start px-3 py-2.5' : 'aspect-square justify-center'}`} title={theme === 'dark' ? t('lightMode') : t('darkMode')}>
               <span className="shrink-0">{theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}</span>
               {isOpen && <span className="truncate text-sm font-medium">{theme === 'dark' ? t('lightMode') : t('darkMode')}</span>}
             </button>
+            <ResourceMonitor isOpen={isOpen} />
+            <SystemWidget isOpen={isOpen} />
 
-              <button type="button" onClick={onOpenSettings} className={`flex w-full items-center gap-3 rounded-xl text-zinc-500 transition-all duration-200 hover:bg-zinc-100 hover:text-black dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-white ${isOpen ? 'justify-start px-3 py-2.5' : 'aspect-square justify-center'}`} title={`${user.username} - ${t('settings')}`}>
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-linear-to-br from-pink-500 to-purple-600 text-xs font-bold text-white">{user.username.charAt(0).toUpperCase()}</span>
-                {isOpen && <span className="min-w-0 flex-1 truncate text-left text-sm font-medium">{user.username}</span>}
-              </button>
           </div>
         </nav>
       </aside>

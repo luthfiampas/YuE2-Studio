@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, FolderDown, FolderOpen, Loader2, Minimize2, Move, X } from 'lucide-react';
+import { Check, FolderDown, Loader2, Minimize2, Move, X } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
-import { onSaving, revealSaved, type SavingFile } from '../services/saveFile';
+import { onSaving, type SavingFile } from '../services/saveFile';
 import { dockSlot, useFloatable } from '../services/useFloatable';
 
 /**
@@ -103,15 +103,6 @@ export const FilesPanel: React.FC = () => {
                   </div>
                 )}
                 {file.path && <div className="mt-1 truncate text-[10px] text-zinc-500" title={file.path}>{file.path}</div>}
-                {file.state === 'done' && file.path && (
-                  <button
-                    type="button"
-                    onClick={() => void revealSaved(file.path as string)}
-                    className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-zinc-300 px-2.5 py-1 text-[12px] text-zinc-600 hover:border-pink-400 hover:text-pink-600 dark:border-white/15 dark:text-zinc-300"
-                  >
-                    <FolderOpen size={13} /> {t('filesShowInFolder')}
-                  </button>
-                )}
                 {file.state === 'error' && file.error && <div className="mt-1 wrap-break-word text-[11px] text-rose-600 dark:text-rose-300">{file.error}</div>}
               </div>
             );

@@ -77,12 +77,3 @@ export async function saveFile(name: string, source: SaveSource): Promise<void> 
     tell({ id, name, state: 'error', error: problem instanceof Error ? problem.message : String(problem) });
   }
 }
-
-/** Explorer, open on a saved file. */
-export async function revealSaved(path: string): Promise<void> {
-  await answer(await fetch(apiUrl('/v1/files/reveal'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  }));
-}

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AudioWaveform } from './AudioWaveform';
-import { AlertTriangle, Check, FolderOpen, Loader2, Pause, Play, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, Wand2, X } from 'lucide-react';
+import { AlertTriangle, Check, FolderOpen, Loader2, Pause, Play, Plus, RefreshCw, Search, Trash2, Wand2, X } from 'lucide-react';
 import { Song } from '../types';
 import { useI18n } from '../context/I18nContext';
 import { AUDIO_ACCEPT } from '../services/audioFiles';
@@ -165,24 +165,6 @@ export const ProcessingModal: React.FC<ProcessingModalProps> = ({ song, onClose,
     if (!plugin) return;
     setVstChain(chain => [...chain, { path: plugin.path, name: plugin.name, state_id: null, enabled: true }]);
     setVstPick('');
-  };
-
-  // the plugin's own window; its settings are saved into the slot when it closes
-  const configureVst = async (index: number) => {
-    const slot = vstChain[index];
-    setError(null);
-    try {
-      const response = await fetch('/v1/processing/vst/editor', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: slot.path, state_id: slot.state_id ?? null }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      setVstChain(chain => chain.map((entry, position) => (position === index ? { ...entry, state_id: body.state_id } : entry)));
-    } catch (problem) {
-      setError(problem instanceof Error ? problem.message : String(problem));
-    }
   };
 
   // polling while a run works
@@ -367,10 +349,6 @@ export const ProcessingModal: React.FC<ProcessingModalProps> = ({ song, onClose,
                           <div key={`${slot.path}-${index}`} className="flex items-center gap-2 rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-white/10">
                             <input type="checkbox" checked={slot.enabled} onChange={event => setVstChain(chain => chain.map((entry, position) => (position === index ? { ...entry, enabled: event.target.checked } : entry)))} className="accent-pink-500" aria-label={slot.name} />
                             <span className="min-w-0 flex-1 truncate text-xs text-zinc-800 dark:text-zinc-200" title={slot.path}>{index + 1}. {slot.name}</span>
-                            {slot.state_id && <Check size={12} className="shrink-0 text-emerald-500" aria-label={t('processVstConfigured')} />}
-                            <button type="button" onClick={() => void configureVst(index)} className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-zinc-500 hover:text-pink-500">
-                              <SlidersHorizontal size={12} />{t('processVstConfigure')}
-                            </button>
                             <button type="button" onClick={() => setVstChain(chain => chain.filter((_, position) => position !== index))} className="shrink-0 text-zinc-400 hover:text-rose-500" aria-label={t('processVstRemove')}>
                               <Trash2 size={12} />
                             </button>

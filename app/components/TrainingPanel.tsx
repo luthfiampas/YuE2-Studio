@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { karaokeStatusChanged, useSystemResources } from '../services/studioQueries';
-import { AlertTriangle, BookOpen, Check, CheckSquare, ChevronDown, Clock, ChevronLeft, ChevronRight, Cpu, Download, FolderInput, FolderOpen, FolderOutput, Headphones, Library, Loader2, Mic2, MoreHorizontal, Music, Play, Plus, RotateCcw, Search, Square, Trash2, UploadCloud, Wand2, X } from 'lucide-react';
+import { AlertTriangle, BookOpen, Check, CheckSquare, ChevronDown, Clock, ChevronLeft, ChevronRight, Cpu, Download, FolderInput, FolderOpen, Headphones, Library, Loader2, Mic2, MoreHorizontal, Music, Play, Plus, RotateCcw, Search, Square, Trash2, UploadCloud, Wand2, X } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
 import { AUDIO_ACCEPT } from '../services/audioFiles';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -39,7 +39,6 @@ import {
   pickedFromDrop,
   pickedFromInput,
   prepareDataset,
-  revealDataset,
   setTrainAfter,
   startRun,
   takeAsIs,
@@ -1189,7 +1188,6 @@ export const TrainingPanel: React.FC = () => {
               <button type="button" onClick={() => setGuideOpen(value => !value)} className={OUTLINE} aria-pressed={guideOpen}><BookOpen size={13} />{t('trainingGuideOpen')}</button>
               <MoreMenu
                 items={[
-                  { label: t('trainingExport'), icon: <FolderOutput size={14} />, onClick: () => void revealDataset(dataset.id).catch(problem => setError(errorText(problem))) },
                   { label: t('trainingDeleteDataset'), icon: <Trash2 size={14} />, onClick: () => setDeleting({ kind: 'dataset', id: dataset.id }), danger: true, disabled: Boolean(job && !job.finished && job.dataset === dataset.id) },
                 ]}
               />

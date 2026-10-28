@@ -991,15 +991,6 @@ impl Training {
         Ok(dataset)
     }
 
-    /// The folder a dataset lives in, to share it with another studio.
-    pub fn dataset_folder(&self, id: &str) -> Result<PathBuf> {
-        let dir = self.dataset_dir(id)?;
-        if !dir.join("dataset.json").is_file() {
-            bail!("no dataset {id}");
-        }
-        Ok(dir)
-    }
-
     pub fn remove_dataset(&self, id: &str) -> Result<()> {
         let dir = self.dataset_dir(id)?;
         if !dir.join("dataset.json").is_file() {
