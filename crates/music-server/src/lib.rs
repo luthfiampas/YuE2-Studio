@@ -10240,15 +10240,15 @@ async fn voice_swap_delete_swap(State(state): State<AppState>, Path(id): Path<St
 }
 
 /// The converted stem, as the page's player reads it.
-async fn voice_swap_swap_audio(State(state): State<AppState>, Path(id): Path<String>) -> Result<axum::response::Response, (StatusCode, Json<ApiError>)> {
+async fn voice_swap_swap_audio(State(state): State<AppState>, Path(id): Path<String>, request: Request) -> Result<axum::response::Response, (StatusCode, Json<ApiError>)> {
     if !voice_swap::valid_id(&id) {
         return Err(api_error(StatusCode::BAD_REQUEST, "not a swap id".to_string()));
     }
     let path = state.voice_swap.swaps_dir().join(&id).join("output.wav");
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|error| api_error(StatusCode::NOT_FOUND, format!("read {}: {error}", path.display())))?;
-    Ok(([(axum::http::header::CONTENT_TYPE, "audio/wav")], bytes).into_response())
+    if !path.is_file() {
+        return Err(api_error(StatusCode::NOT_FOUND, format!("read {}: no such file", path.display())));
+    }
+    Ok(serve_audio_file(&path, request).await)
 }
 
 /// The vocal stems the library has, as both tools offer them.
@@ -10379,7 +10379,7 @@ async fn dereverb_delete(State(state): State<AppState>, Path(id): Path<String>) 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
-async fn dereverb_audio(State(state): State<AppState>, Path((id, stem)): Path<(String, String)>) -> Result<axum::response::Response, (StatusCode, Json<ApiError>)> {
+async fn dereverb_audio(State(state): State<AppState>, Path((id, stem)): Path<(String, String)>, request: Request) -> Result<axum::response::Response, (StatusCode, Json<ApiError>)> {
     if !voice_swap::valid_id(&id) {
         return Err(api_error(StatusCode::BAD_REQUEST, "not a run id".to_string()));
     }
@@ -10387,10 +10387,10 @@ async fn dereverb_audio(State(state): State<AppState>, Path((id, stem)): Path<(S
         return Err(api_error(StatusCode::BAD_REQUEST, format!("unknown stem {stem}")));
     }
     let path = state.dereverb.root().join("jobs").join(&id).join(format!("{stem}.wav"));
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|error| api_error(StatusCode::NOT_FOUND, format!("read {stem}: {error}")))?;
-    Ok(([(axum::http::header::CONTENT_TYPE, "audio/wav")], bytes).into_response())
+    if !path.is_file() {
+        return Err(api_error(StatusCode::NOT_FOUND, format!("read {stem}: no such file")));
+    }
+    Ok(serve_audio_file(&path, request).await)
 }
 
 #[cfg(test)]
