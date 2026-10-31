@@ -139,6 +139,20 @@ fn every_modal_renders_with_its_title() {
                 selected_choice: 1,
             },
         ),
+        (
+            "Push Server Binary",
+            ModalState::ConfirmPush {
+                full_bundle: false,
+                selected_choice: 0,
+            },
+        ),
+        (
+            "Push Full Bundle",
+            ModalState::ConfirmPush {
+                full_bundle: true,
+                selected_choice: 0,
+            },
+        ),
         ("Keyboard Shortcuts", ModalState::Help { scroll: 0 }),
         (
             "Configuration",

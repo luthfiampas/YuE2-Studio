@@ -42,7 +42,8 @@ pub fn modal(title: impl Into<String>, border: Color) -> Block<'static> {
 
 /// The single-line hint bar that sits under a table, list or dialog.
 pub fn hints(items: &[(&str, &str)]) -> Paragraph<'static> {
-    let mut spans = Vec::with_capacity(items.len() * 2);
+    let mut spans = Vec::with_capacity(items.len() * 2 + 1);
+    spans.push(Span::raw(" "));
     for (index, (key, label)) in items.iter().enumerate() {
         if index > 0 {
             spans.push(Span::raw("   "));

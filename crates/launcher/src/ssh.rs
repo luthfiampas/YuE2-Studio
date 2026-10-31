@@ -75,7 +75,7 @@ fn apply_auth(cmd: &mut Command, auth: &SshAuthMethod) {
 fn pod_command(program: &str, port: u16, auth: &SshAuthMethod) -> Command {
     let mut cmd = Command::new(program);
     if program == "scp" {
-        cmd.arg("-q");
+        cmd.arg("-q").arg("-C");
     }
     cmd.arg(if program == "scp" { "-P" } else { "-p" })
         .arg(port.to_string())
@@ -91,12 +91,32 @@ fn pod_command(program: &str, port: u16, auth: &SshAuthMethod) -> Command {
 }
 
 impl SshRemoteOps {
+    /// Checks whether the CUDA engine (yue-server) already exists on the remote pod.
+    pub async fn check_engine_exists(
+        host: &str,
+        ssh_port: u16,
+        auth: &SshAuthMethod,
+    ) -> bool {
+        let mut cmd = pod_command("ssh", ssh_port, auth);
+        cmd.arg(format!("root@{}", host))
+            .arg(format!(
+                "test -f {}/bin/yue-server",
+                REMOTE_STUDIO_DIR
+            ));
+        cmd.status().await.map(|s| s.success()).unwrap_or(false)
+    }
+
     /// Uploads binaries to the remote pod and restarts the studio service.
+    ///
+    /// If `full_bundle` is false and the remote CUDA engine exists, performs a fast
+    /// push of the `music-server` binary only. Otherwise, packages and pushes the full
+    /// archive including both the engine and server.
     pub async fn push_and_restart(
         host: &str,
         ssh_port: u16,
         auth: &SshAuthMethod,
         tx: Option<&tokio::sync::mpsc::UnboundedSender<crate::app::AsyncEvent>>,
+        full_bundle: bool,
     ) -> Result<String> {
         let repo_root = crate::repo_root();
         let package_script = repo_root.join("runpod").join("package.sh");
@@ -109,61 +129,174 @@ impl SshRemoteOps {
             .join("dist")
             .join("bin")
             .join("music-server");
+        let target_server = repo_root
+            .join("target")
+            .join("release")
+            .join("music-server");
 
-        if package_script.exists() {
+        // Sync local release build into runpod/dist/bin/music-server if newer
+        if target_server.exists() {
+            let update_needed = if !server_bin.exists() {
+                true
+            } else {
+                let target_time = std::fs::metadata(&target_server).and_then(|m| m.modified()).ok();
+                let server_time = std::fs::metadata(&server_bin).and_then(|m| m.modified()).ok();
+                match (target_time, server_time) {
+                    (Some(t), Some(s)) => t > s,
+                    _ => false,
+                }
+            };
+            if update_needed {
+                if let Some(parent) = server_bin.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::copy(&target_server, &server_bin);
+            }
+        }
+
+        let use_fast_push = if !full_bundle {
             if let Some(t) = tx {
                 let _ = t.send(crate::app::AsyncEvent::SetBusy(Some(
-                    "Packaging latest binaries into distribution archive...".into(),
+                    "Checking engine binaries on remote pod...".into(),
                 )));
                 let _ = t.send(crate::app::AsyncEvent::Log(
-                    "📦 Packaging distribution bundle via package.sh...".into(),
+                    "🔍 Checking for existing CUDA engine binaries on pod...".into(),
                 ));
             }
-            // A failed package leaves yesterday's archive in place, and the
-            // push below would then upload the old binaries without a word.
-            let packaged = Command::new("bash")
-                .arg(&package_script)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+            let engine_on_pod = Self::check_engine_exists(host, ssh_port, auth).await;
+            if engine_on_pod {
+                if let Some(t) = tx {
+                    let _ = t.send(crate::app::AsyncEvent::Log(
+                        "⚡ CUDA engine found on pod. Using fast push (music-server only)...".into(),
+                    ));
+                }
+                true
+            } else {
+                if let Some(t) = tx {
+                    let _ = t.send(crate::app::AsyncEvent::Log(
+                        "⚠️ CUDA engine missing on pod. Falling back to full bundle push...".into(),
+                    ));
+                }
+                false
+            }
+        } else {
+            if let Some(t) = tx {
+                let _ = t.send(crate::app::AsyncEvent::Log(
+                    "📦 Full bundle push requested (music-server + CUDA engine)...".into(),
+                ));
+            }
+            false
+        };
+
+        if use_fast_push {
+            if !server_bin.exists() {
+                bail!("music-server binary not found at runpod/dist/bin/music-server. Run [b] to compile first.");
+            }
+
+            if let Some(t) = tx {
+                let _ = t.send(crate::app::AsyncEvent::SetBusy(Some(
+                    "Uploading music-server via compressed SCP...".into(),
+                )));
+                let _ = t.send(crate::app::AsyncEvent::Log(
+                    "🚀 Uploading music-server binary with SCP compression (-C)...".into(),
+                ));
+            }
+
+            // Ensure bin directory exists on remote pod
+            let mut mkdir_cmd = pod_command("ssh", ssh_port, auth);
+            mkdir_cmd.arg(format!("root@{}", host)).arg(format!(
+                "mkdir -p {}/bin",
+                REMOTE_STUDIO_DIR
+            ));
+            let _ = mkdir_cmd.output().await;
+
+            let remote_tmp_bin = format!("{}/bin/music-server.tmp", REMOTE_STUDIO_DIR);
+            let remote_target_bin = format!("{}/bin/music-server", REMOTE_STUDIO_DIR);
+
+            let mut scp = pod_command("scp", ssh_port, auth);
+            scp.arg(&server_bin)
+                .arg(format!("root@{}:{}", host, remote_tmp_bin));
+
+            let scp_output = scp
                 .output()
                 .await
-                .context("Failed to run package.sh")?;
-            if !packaged.status.success() {
-                let err = String::from_utf8_lossy(&packaged.stderr);
-                let out = String::from_utf8_lossy(&packaged.stdout);
-                bail!("package.sh failed, nothing was pushed: {}\n{}", out.trim(), err.trim());
+                .context("Failed to run scp for music-server")?;
+            if !scp_output.status.success() {
+                let err = String::from_utf8_lossy(&scp_output.stderr);
+                bail!("SCP failed to upload music-server to pod: {}", err.trim());
             }
-        }
 
-        // Even a script that "succeeded" can have left an older archive: the
-        // pushed file must not predate the binary it is meant to carry.
-        if archive.exists() && server_bin.exists() {
-            let archive_time = std::fs::metadata(&archive).and_then(|meta| meta.modified()).ok();
-            let server_time = std::fs::metadata(&server_bin).and_then(|meta| meta.modified()).ok();
-            if let (Some(archive_time), Some(server_time)) = (archive_time, server_time) {
-                if archive_time < server_time {
-                    bail!(
-                        "the archive is older than music-server; package.sh did not rebuild it. \
-                         Nothing was pushed."
-                    );
+            // Atomically replace and mark executable
+            let mut finalize_cmd = pod_command("ssh", ssh_port, auth);
+            finalize_cmd.arg(format!("root@{}", host)).arg(format!(
+                "mv -f {} {} && chmod +x {}",
+                remote_tmp_bin, remote_target_bin, remote_target_bin
+            ));
+
+            let fin_output = finalize_cmd
+                .output()
+                .await
+                .context("Failed to finalize music-server on remote pod")?;
+            if !fin_output.status.success() {
+                let err = String::from_utf8_lossy(&fin_output.stderr);
+                bail!("Failed to activate music-server on remote pod: {}", err.trim());
+            }
+        } else {
+            if package_script.exists() {
+                if let Some(t) = tx {
+                    let _ = t.send(crate::app::AsyncEvent::SetBusy(Some(
+                        "Packaging latest binaries into distribution archive...".into(),
+                    )));
+                    let _ = t.send(crate::app::AsyncEvent::Log(
+                        "📦 Packaging full distribution bundle via package.sh...".into(),
+                    ));
+                }
+                let packaged = Command::new("bash")
+                    .arg(&package_script)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await
+                    .context("Failed to run package.sh")?;
+                if !packaged.status.success() {
+                    let err = String::from_utf8_lossy(&packaged.stderr);
+                    let out = String::from_utf8_lossy(&packaged.stdout);
+                    bail!("package.sh failed, nothing was pushed: {}\n{}", out.trim(), err.trim());
                 }
             }
-        }
 
-        if archive.exists() {
+            if !archive.exists() {
+                bail!("Archive not found at runpod/dist/yue2-studio-runpod.tar.gz. Run build first.");
+            }
+
+            if server_bin.exists() {
+                let archive_time = std::fs::metadata(&archive).and_then(|meta| meta.modified()).ok();
+                let server_time = std::fs::metadata(&server_bin).and_then(|meta| meta.modified()).ok();
+                if let (Some(archive_time), Some(server_time)) = (archive_time, server_time) {
+                    if archive_time < server_time {
+                        bail!(
+                            "the archive is older than music-server; package.sh did not rebuild it. \
+                             Nothing was pushed."
+                        );
+                    }
+                }
+            }
+
             if let Some(t) = tx {
                 let _ = t.send(crate::app::AsyncEvent::SetBusy(Some(
-                    "Uploading archive to pod via SCP...".into(),
+                    "Uploading full bundle archive via SCP...".into(),
                 )));
                 let _ = t.send(crate::app::AsyncEvent::Log(
-                    "📦 Uploading yue2-studio-runpod.tar.gz via SCP...".into(),
+                    "📦 Uploading yue2-studio-runpod.tar.gz via SCP (-C)...".into(),
                 ));
             }
+
+            let remote_tmp_archive = format!("{}.tmp", REMOTE_ARCHIVE);
 
             let mut scp = pod_command("scp", ssh_port, auth);
             scp.arg(&archive)
-                .arg(format!("root@{}:{}", host, REMOTE_ARCHIVE));
+                .arg(format!("root@{}:{}", host, remote_tmp_archive));
 
             let scp_output = scp.output().await.context("Failed to run scp")?;
             if !scp_output.status.success() {
@@ -182,7 +315,8 @@ impl SshRemoteOps {
 
             let mut extract_cmd = pod_command("ssh", ssh_port, auth);
             extract_cmd.arg(format!("root@{}", host)).arg(format!(
-                "mkdir -p {dir} && tar --no-same-owner --no-same-permissions --touch -xzf {archive} -C {dir}/ && rm -f {archive} {dir}/*.sh",
+                "mv -f {tmp_archive} {archive} && mkdir -p {dir} && tar --no-same-owner --no-same-permissions --touch -xzf {archive} -C {dir}/ && rm -f {archive} {dir}/*.sh",
+                tmp_archive = remote_tmp_archive,
                 dir = REMOTE_STUDIO_DIR,
                 archive = REMOTE_ARCHIVE,
             ));
@@ -195,32 +329,6 @@ impl SshRemoteOps {
                 let err = String::from_utf8_lossy(&ext_output.stderr);
                 bail!("Failed to extract archive on remote pod: {}", err.trim());
             }
-        } else if server_bin.exists() {
-            if let Some(t) = tx {
-                let _ = t.send(crate::app::AsyncEvent::SetBusy(Some(
-                    "Uploading music-server binary via SCP...".into(),
-                )));
-                let _ = t.send(crate::app::AsyncEvent::Log(
-                    "📦 Uploading music-server binary via SCP...".into(),
-                ));
-            }
-
-            let mut scp = pod_command("scp", ssh_port, auth);
-            scp.arg(&server_bin).arg(format!(
-                "root@{}:{}/bin/music-server",
-                host, REMOTE_STUDIO_DIR
-            ));
-
-            let scp_output = scp
-                .output()
-                .await
-                .context("Failed to run scp for music-server")?;
-            if !scp_output.status.success() {
-                let err = String::from_utf8_lossy(&scp_output.stderr);
-                bail!("SCP failed to upload music-server to pod: {}", err.trim());
-            }
-        } else {
-            bail!("No compiled distribution found at runpod/dist/. Run build server first.");
         }
 
         if let Some(t) = tx {

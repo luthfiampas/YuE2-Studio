@@ -40,6 +40,10 @@ pub enum ModalState {
         target: BuildTarget,
         selected_choice: usize,
     },
+    ConfirmPush {
+        full_bundle: bool,
+        selected_choice: usize,
+    },
     /// The only dialog where "no" still exits the app.
     ConfirmQuit {
         running_pods: usize,
@@ -68,6 +72,9 @@ impl ModalState {
                 selected_choice, ..
             }
             | ModalState::ConfirmBuild {
+                selected_choice, ..
+            }
+            | ModalState::ConfirmPush {
                 selected_choice, ..
             } => selected_choice,
             _ => return None,
@@ -797,6 +804,8 @@ impl App {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(unix)]
+        cmd.process_group(0);
 
         match cmd.spawn() {
             Ok(mut child) => {
@@ -824,6 +833,14 @@ impl App {
 
     pub fn stop_web_ui(&mut self) {
         if let Some(mut child) = self.web_ui_process.take() {
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                // Kill the entire process group (npm + sh + node/vite)
+                let _ = std::process::Command::new("kill")
+                    .arg("-TERM")
+                    .arg(format!("-{}", pid))
+                    .output();
+            }
             let _ = child.start_kill();
             self.log("Local Web UI stopped.");
         }
@@ -837,9 +854,9 @@ impl App {
         }
     }
 
-    pub fn push_selected_pod(&mut self) {
+    pub fn push_selected_pod(&mut self, full_bundle: bool) {
         if self.tunnel_alive {
-            self.log("⚠️ Cannot push binaries while connected to pod. Please disconnect tunnel ([Enter] or [d]) first.");
+            self.log("⚠️ Cannot push binaries while connected to pod. Please disconnect tunnel ([Enter]) first.");
             return;
         }
 
@@ -854,18 +871,19 @@ impl App {
 
         let auth = self.auth_method.clone();
         let tx = self.tx.clone();
+        let mode_desc = if full_bundle { "full bundle" } else { "fast binary" };
 
         let _ = tx.send(AsyncEvent::SetBusy(Some(format!(
-            "Uploading binaries to {}:{}...",
-            ip, port
+            "Pushing ({}) to {}:{}...",
+            mode_desc, ip, port
         ))));
         let _ = tx.send(AsyncEvent::Log(format!(
-            "Starting SCP upload of binaries to root@{}:{}...",
-            ip, port
+            "Starting push ({}) to root@{}:{}...",
+            mode_desc, ip, port
         )));
 
         tokio::spawn(async move {
-            match SshRemoteOps::push_and_restart(&ip, port, &auth, Some(&tx)).await {
+            match SshRemoteOps::push_and_restart(&ip, port, &auth, Some(&tx), full_bundle).await {
                 Ok(out) => {
                     let _ = tx.send(AsyncEvent::TaskCompleted {
                         message: format!("Push succeeded! Remote output: {}", out),
@@ -975,7 +993,7 @@ impl App {
             crate::repo_root().join("runpod").join("build-engine.sh"),
             vec![output.into_os_string()],
             "Building multi-arch CUDA yue-server via Docker...",
-            "CUDA yue-server engine built. Press 'p' to package and push.",
+            "CUDA yue-server engine built. Press 'P' to package and push full bundle.",
         );
     }
 
@@ -1276,7 +1294,8 @@ impl App {
             ModalState::ConfirmPod { .. }
             | ModalState::ConfirmRestartDaemon { .. }
             | ModalState::ConfirmQuit { .. }
-            | ModalState::ConfirmBuild { .. } => {
+            | ModalState::ConfirmBuild { .. }
+            | ModalState::ConfirmPush { .. } => {
                 // Arrows, Enter, y/n and Esc are already handled by `choice`.
             }
             ModalState::Help { scroll } => {
@@ -1289,7 +1308,7 @@ impl App {
                         self.modal = ModalState::None;
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if *scroll + 1 < 16 {
+                        if *scroll + 1 < 32 {
                             *scroll += 1;
                         }
                     }
@@ -1406,7 +1425,32 @@ impl App {
                 };
             }
             KeyCode::Char('p') => {
-                self.push_selected_pod();
+                if self.tunnel_alive {
+                    self.log("⚠️ Cannot push binaries while connected to pod. Please disconnect tunnel ([Enter]) first.");
+                } else if self.selected_pod().is_none() {
+                    self.log("No pod selected.");
+                } else if self.selected_pod().and_then(|p| p.ssh_connection_info()).is_none() {
+                    self.log("Selected pod has no active SSH endpoint.");
+                } else {
+                    self.modal = ModalState::ConfirmPush {
+                        full_bundle: false,
+                        selected_choice: 0,
+                    };
+                }
+            }
+            KeyCode::Char('P') => {
+                if self.tunnel_alive {
+                    self.log("⚠️ Cannot push binaries while connected to pod. Please disconnect tunnel ([Enter]) first.");
+                } else if self.selected_pod().is_none() {
+                    self.log("No pod selected.");
+                } else if self.selected_pod().and_then(|p| p.ssh_connection_info()).is_none() {
+                    self.log("Selected pod has no active SSH endpoint.");
+                } else {
+                    self.modal = ModalState::ConfirmPush {
+                        full_bundle: true,
+                        selected_choice: 0,
+                    };
+                }
             }
             KeyCode::Char('d') | KeyCode::Char('R') => {
                 if let Some(pod) = self.selected_pod() {
@@ -1481,6 +1525,13 @@ impl App {
                     }
                 } else {
                     self.log(target.cancel_message());
+                }
+            }
+            ModalState::ConfirmPush { full_bundle, .. } => {
+                if confirmed {
+                    self.push_selected_pod(full_bundle);
+                } else {
+                    self.log("Binary push cancelled.");
                 }
             }
             _ => {}
@@ -1614,9 +1665,7 @@ impl Drop for App {
         if let Some(mut tunnel) = self.ssh_tunnel.take() {
             tunnel.stop();
         }
-        if let Some(mut child) = self.web_ui_process.take() {
-            let _ = child.start_kill();
-        }
+        self.stop_web_ui();
     }
 }
 

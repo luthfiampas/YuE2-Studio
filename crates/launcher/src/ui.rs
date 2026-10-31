@@ -82,6 +82,41 @@ pub fn draw(f: &mut Frame, app: &App) {
         } => {
             draw_build_confirm_modal(f, *target, *selected_choice);
         }
+        ModalState::ConfirmPush {
+            full_bundle,
+            selected_choice,
+        } => {
+            let (title, lines, label) = if *full_bundle {
+                (
+                    "Push Full Bundle",
+                    vec![
+                        "Package and upload full distribution archive to remote pod?".to_string(),
+                        "Includes music-server and the native CUDA yue-server engine.".to_string(),
+                        "Remote studio daemon will be restarted automatically upon completion.".to_string(),
+                    ],
+                    "Push Full Bundle",
+                )
+            } else {
+                (
+                    "Push Server Binary",
+                    vec![
+                        "Upload music-server binary to the remote pod via SCP?".to_string(),
+                        "Fast push: engine is reused if already present on the pod.".to_string(),
+                        "Remote studio daemon will be restarted automatically upon completion.".to_string(),
+                    ],
+                    "Push Server",
+                )
+            };
+            draw_confirm_modal(
+                f,
+                title,
+                theme().accent,
+                &refs(&lines),
+                label,
+                "Cancel",
+                *selected_choice,
+            );
+        }
         ModalState::ConfirmQuit {
             running_pods,
             selected_choice,
@@ -1304,14 +1339,14 @@ struct HelpEntry {
 }
 
 fn draw_help_modal(f: &mut Frame, scroll_offset: usize) {
-    let area = responsive_modal_rect(108, 25, f.area());
+    let area = responsive_modal_rect(108, 28, f.area());
     f.render_widget(Clear, area);
 
     let entries: &[HelpEntry] = &[
         HelpEntry {
             key: "Enter",
-            action: "Toggle Tunnel",
-            desc: "Open/close SSH tunnel to remote pod (127.0.0.1:3791)",
+            action: "Toggle Studio",
+            desc: "Connect/disconnect tunnel, auto-start remote daemon & local Vite UI",
         },
         HelpEntry {
             key: "r",
@@ -1346,7 +1381,7 @@ fn draw_help_modal(f: &mut Frame, scroll_offset: usize) {
         HelpEntry {
             key: "w",
             action: "Toggle Vite",
-            desc: "Start or stop local Vite frontend dev server",
+            desc: "Start or stop local Vite UI dev server cleanly",
         },
         HelpEntry {
             key: "d",
@@ -1365,8 +1400,13 @@ fn draw_help_modal(f: &mut Frame, scroll_offset: usize) {
         },
         HelpEntry {
             key: "p",
-            action: "Push Binaries",
-            desc: "SCP binaries to pod & trigger service restart",
+            action: "Push Server",
+            desc: "Fast push: music-server binary only (if engine exists on pod)",
+        },
+        HelpEntry {
+            key: "P",
+            action: "Push Full Bundle",
+            desc: "Full push: package and upload music-server + CUDA engine archive",
         },
         HelpEntry {
             key: "/",
@@ -1391,7 +1431,7 @@ fn draw_help_modal(f: &mut Frame, scroll_offset: usize) {
     ];
 
     let total = entries.len();
-    let visible_rows = (area.height.saturating_sub(2 + 2 + 3) as usize).max(1);
+    let visible_rows = (area.height.saturating_sub(8) as usize).max(1);
     let offset = scroll_offset.min(total.saturating_sub(visible_rows));
     let end_idx = (offset + visible_rows).min(total);
 
@@ -1415,6 +1455,7 @@ fn draw_help_modal(f: &mut Frame, scroll_offset: usize) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),    // Help Table
+            Constraint::Length(1), // Spacer / vertical padding
             Constraint::Length(1), // Footer instructions
         ])
         .split(inner);
@@ -1454,7 +1495,7 @@ fn draw_help_modal(f: &mut Frame, scroll_offset: usize) {
     f.render_widget(table, chunks[0]);
 
     let instr_widget = style::hints(&[("↑/↓", "scroll"), ("Esc", "close")]);
-    f.render_widget(instr_widget, chunks[1]);
+    f.render_widget(instr_widget, chunks[2]);
 }
 
 fn draw_settings_modal(
