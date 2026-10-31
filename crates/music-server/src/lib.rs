@@ -169,6 +169,7 @@ struct AppState {
     prepare_train: prepare::TrainSlot,
     /// The update screen's download, while it runs and after.
     update_job: Arc<RwLock<Option<update_screen::Job>>>,
+    generation_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -401,6 +402,8 @@ struct MusicJob {
     /// How the lyrics were laid along a score that came without sections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     laid: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remote_job_id: Option<String>,
 }
 
 impl MusicJob {
@@ -476,6 +479,7 @@ fn job_from_stored(stored: library::StoredJob, status: MusicJobStatus, message: 
         params: None,
         playlist_id: stored.playlist_id,
         laid: None,
+        remote_job_id: None,
     }
 }
 
@@ -527,33 +531,9 @@ async fn resume_unfinished_jobs(state: AppState) {
         return;
     }
     for old in cut_off {
-        let (resumed_as, message) = if old.attempt >= MAX_RESUMES {
-            (None, format!("Cut off when the studio closed, and already started again {MAX_RESUMES} times; make it again by hand."))
-        } else if let Some(replay) = old.request.get("replay") {
-            match serde_json::from_value::<ReplayMusicJobRequest>(replay.clone()) {
-                Err(error) => (None, format!("Cut off when the studio closed; its request could not be read to start it again: {error}")),
-                Ok(mut request) => {
-                    request.client_ref = None;
-                    match submit_replay_job(state.clone(), request, old.attempt + 1).await {
-                        Ok((_, Json(job))) => (Some(job.id.clone()), format!("Cut off when the studio closed; started again as {}.", job.id)),
-                        Err((_, Json(error))) => (None, format!("Cut off when the studio closed; it could not be started again: {}", error.error)),
-                    }
-                }
-            }
-        } else {
-            match serde_json::from_value::<CreateMusicJobRequest>(old.request.clone()) {
-                Err(error) => (None, format!("Cut off when the studio closed; its request could not be read to start it again: {error}")),
-                Ok(mut request) => {
-                    request.client_ref = None;
-                    let (status, Json(job)) = submit_music_job(state.clone(), request, old.attempt + 1).await;
-                    if status == StatusCode::ACCEPTED {
-                        (Some(job.id.clone()), format!("Cut off when the studio closed; started again as {}.", job.id))
-                    } else {
-                        (None, format!("Cut off when the studio closed; it could not be started again: {}", job.message))
-                    }
-                }
-            }
-        };
+        // Do not auto-resume old cut-off jobs into the GPU queue on startup.
+        // Mark them cancelled so they do not unexpectedly burn compute or flood notifications.
+        let (resumed_as, message): (Option<String>, String) = (None, "Cut off when the studio closed; cancelled to prevent unexpected GPU usage.".to_string());
         if let Err(error) = state.library.cancel_cut_off_music_job(&old.id, resumed_as.as_deref(), &message) {
             eprintln!("[ERROR] a cut-off song could not be marked: {error:#}");
         }
@@ -1053,6 +1033,7 @@ pub async fn serve() -> anyhow::Result<()> {
         prepare_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         prepare_train: Arc::new(std::sync::Mutex::new(None)),
         update_job: Arc::new(RwLock::new(None)),
+        generation_gate: Arc::new(tokio::sync::Mutex::new(())),
         training: Arc::new(training::Training::new(
             &studio_data_root().unwrap_or_else(|| std::path::PathBuf::from(".")),
             PRIMARY_MUSIC_ENGINE_ID,
@@ -8274,46 +8255,38 @@ async fn submit_music_job(state: AppState, mut request: CreateMusicJobRequest, a
         None => None,
     };
     let stored_request = serde_json::to_value(&request).unwrap_or(Value::Null);
-    let _using = state.engine_use.read().await;
-    match state.music_server.submit(engine_submission(&body)).await {
-        Ok(remote) => {
-            let job = MusicJob {
-                derived,
-                id: remote.id,
-                client_ref: request.client_ref.clone(),
-                submitted_at: unix_millis(),
-                engine_id,
-                cover_prompt: request.cover_prompt.clone(),
-                title: Some(titled(&request, &state.adapters)),
-                status: MusicJobStatus::Queued,
-                dispatch: MusicJobDispatch::Local,
-                phase: MusicJobPhase::Queued,
-                style: request.style,
-                lyrics: request.lyrics,
-                duration_seconds: request.duration_seconds.unwrap_or_default(),
-                generation_settings: body,
-                song: None,
-                songs: vec![],
-                message: "Submitted to yue-server.".into(),
-                code: None,
-                params: None,
-                playlist_id: request.playlist_id.clone(),
-                laid,
-            };
-            state.jobs.write().await.insert(job.id.clone(), job.clone());
-            // kept at once, so a song the studio is closed on is not lost
-            if let Err(error) = state.library.save_music_job(&stored_job(&job, stored_request, attempt)) {
-                eprintln!("[ERROR] the song's request could not be kept: {error:#}");
-            }
-            spawn_job_watcher(state.clone(), job.id.clone());
-            (StatusCode::ACCEPTED, Json(job))
-        }
-        Err(error) => {
-            let job = failed_request_job(request, engine_id, SongError::EngineRefused(error.to_string()));
-            state.jobs.write().await.insert(job.id.clone(), job.clone());
-            (StatusCode::SERVICE_UNAVAILABLE, Json(job))
-        }
+    let job_id = uuid_suffix();
+    let job = MusicJob {
+        derived,
+        id: job_id.clone(),
+        client_ref: request.client_ref.clone(),
+        submitted_at: unix_millis(),
+        engine_id,
+        cover_prompt: request.cover_prompt.clone(),
+        title: Some(titled(&request, &state.adapters)),
+        status: MusicJobStatus::Queued,
+        dispatch: MusicJobDispatch::Local,
+        phase: MusicJobPhase::Queued,
+        style: request.style,
+        lyrics: request.lyrics,
+        duration_seconds: request.duration_seconds.unwrap_or_default(),
+        generation_settings: body.clone(),
+        song: None,
+        songs: vec![],
+        message: "Queued for generation.".into(),
+        code: None,
+        params: None,
+        playlist_id: request.playlist_id.clone(),
+        laid,
+        remote_job_id: None,
+    };
+    state.jobs.write().await.insert(job.id.clone(), job.clone());
+    // kept at once, so a song the studio is closed on is not lost
+    if let Err(error) = state.library.save_music_job(&stored_job(&job, stored_request, attempt)) {
+        eprintln!("[ERROR] the song's request could not be kept: {error:#}");
     }
+    spawn_queued_job_runner(state.clone(), job_id, body);
+    (StatusCode::ACCEPTED, Json(job))
 }
 
 /// Re-renders a track from its semantic stream: the prefix and the codes
@@ -8354,17 +8327,12 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
     }
     let style = body.get("style").and_then(Value::as_str).unwrap_or_default().to_owned();
     let lyrics = body.get("lyrics").and_then(Value::as_str).unwrap_or_default().to_owned();
-    let _using = state.engine_use.read().await;
-    let remote = state
-        .music_server
-        .submit(engine_submission(&body))
-        .await
-        .map_err(|error| api_error(StatusCode::SERVICE_UNAVAILABLE, format!("the engine refused the job: {error}")))?;
     let title = request.title.clone().filter(|value| !value.trim().is_empty()).or(source_title);
+    let job_id = uuid_suffix();
     let mut job = MusicJob {
         derived: None,
         cover_prompt: None,
-        id: remote.id,
+        id: job_id.clone(),
         client_ref: request.client_ref.clone(),
         submitted_at: unix_millis(),
         engine_id: PRIMARY_MUSIC_ENGINE_ID.into(),
@@ -8375,18 +8343,19 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
         style,
         lyrics,
         duration_seconds: body.get("duration").and_then(Value::as_f64).unwrap_or_default(),
-        generation_settings: body,
+        generation_settings: body.clone(),
         song: None,
         songs: vec![],
         message: if continuing {
-            "Submitted a re-render that composes on from the track's last frame.".into()
+            "Queued a re-render that composes on from the track's last frame.".into()
         } else {
-            "Submitted a re-render: the semantic stream is present, so the autoregressive stage is skipped.".into()
+            "Queued a re-render: the semantic stream is present, so the autoregressive stage is skipped.".into()
         },
         code: None,
         params: None,
         playlist_id: None,
         laid: None,
+        remote_job_id: None,
     };
     if let Some(song_id) = &request.song_id {
         if let Some(original) = state.library.get_song(song_id).map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))? {
@@ -8398,7 +8367,7 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
     if let Err(error) = state.library.save_music_job(&stored_job(&job, stored_request, attempt)) {
         eprintln!("[ERROR] the re-render's request could not be kept: {error:#}");
     }
-    spawn_job_watcher(state.clone(), job.id.clone());
+    spawn_queued_job_runner(state.clone(), job_id, body);
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -8666,12 +8635,106 @@ fn add_to_playlist(library: &library::Library, playlist_id: &str, songs: impl It
 /// The service owns this, not the window: a track finished while the
 /// interface was reloading, closed or on another page still lands in the
 /// library, and only one task ever imports a result.
+fn spawn_queued_job_runner(state: AppState, job_id: String, body: Value) {
+    tokio::spawn(async move {
+        // Wait in line so only ONE job reaches yue-server at a time
+        let _guard = state.generation_gate.lock().await;
+
+        // Check if user cancelled while waiting in queue
+        {
+            let jobs = state.jobs.read().await;
+            if let Some(job) = jobs.get(&job_id) {
+                if matches!(job.status, MusicJobStatus::Cancelled) {
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
+
+        // Submit to engine
+        let submission = engine_submission(&body);
+        let remote_res = {
+            let _using = state.engine_use.read().await;
+            state.music_server.submit(submission).await
+        };
+
+        let remote_id = match remote_res {
+            Ok(remote) => remote.id,
+            Err(error) => {
+                let mut jobs = state.jobs.write().await;
+                if let Some(job) = jobs.get_mut(&job_id) {
+                    job.fail(SongError::EngineRefused(error.to_string()));
+                }
+                return;
+            }
+        };
+
+        // Attach remote_job_id and update message
+        {
+            let mut jobs = state.jobs.write().await;
+            if let Some(job) = jobs.get_mut(&job_id) {
+                job.remote_job_id = Some(remote_id.clone());
+                job.message = "The engine has this job.".into();
+            }
+        }
+
+        // Follow to completion
+        let parts_at_start = state.selected_component_ids.read().await.clone().unwrap_or_default();
+        let mut started = None;
+        follow_job(&state, &job_id, &remote_id, &mut started).await;
+
+        let shared = another_job_under_way(&state, &job_id).await;
+        let work = started.flatten().filter(|_| !shared).map(|at| at.elapsed());
+        let ended = state.jobs.read().await.get(&job_id).map(|job| {
+            let profiles: Vec<String> = job.songs.iter().filter_map(|made| made.song.profile_id.clone()).collect();
+            (job_status_name(&job.status), job.message.clone(), job.songs.len(), profiles, songs_seconds(&job.songs))
+        });
+        if let Some(hub) = &state.hub {
+            match ended.as_ref() {
+                Some(("completed", _, songs, profiles, seconds)) if *songs > 0 => {
+                    hub.count("songs", *songs as u64);
+                    hub.count("song_done", 1);
+                    if let Some(work) = work {
+                        hub.worked("song", *seconds, work);
+                    }
+                    for profile in profiles {
+                        hub.used_model(profile);
+                    }
+                    let set = profiles.first().cloned();
+                    let parts = match &set {
+                        Some(id) => model_manager::profile_components(id),
+                        None => parts_at_start.clone(),
+                    };
+                    hub.used_models(set.as_deref(), &parts, *songs as u64);
+                }
+                Some(("failed", message, ..)) => {
+                    hub.count("song_failed", 1);
+                    hub.failed("song", message);
+                }
+                Some(("cancelled", ..)) => hub.count("song_cancelled", 1),
+                _ => {}
+            }
+        }
+        if let Some((status, message, ..)) = ended {
+            let kept = if status == "completed" {
+                state.library.forget_music_job(&job_id)
+            } else {
+                state.library.set_music_job_status(&job_id, status, &message)
+            };
+            if let Err(error) = kept {
+                eprintln!("[ERROR] the song's state could not be kept: {error:#}");
+            }
+        }
+    });
+}
+
 fn spawn_job_watcher(state: AppState, job_id: String) {
     tokio::spawn(async move {
         // the parts as they were when the song started: the person may switch sets while it is made
         let parts_at_start = state.selected_component_ids.read().await.clone().unwrap_or_default();
         let mut started = None;
-        follow_job(&state, &job_id, &mut started).await;
+        follow_job(&state, &job_id, &job_id, &mut started).await;
         let shared = another_job_under_way(&state, &job_id).await;
         let work = started.flatten().filter(|_| !shared).map(|at| at.elapsed());
         // however it ended, it is no longer one the studio's closing could cut off
@@ -8718,8 +8781,8 @@ fn spawn_job_watcher(state: AppState, job_id: String) {
 
 /// `started` is when the engine took the job, and stays `Some(None)` for a job that started while another was under
 /// way: that one's time includes waiting its turn, so it is not one to measure the card by.
-async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<std::time::Instant>>) {
-    let (state, job_id) = (state.clone(), job_id.to_string());
+async fn follow_job(state: &AppState, job_id: &str, remote_job_id: &str, started: &mut Option<Option<std::time::Instant>>) {
+    let (state, job_id, remote_job_id) = (state.clone(), job_id.to_string(), remote_job_id.to_string());
     {
         let mut unreachable = 0u32;
         loop {
@@ -8728,7 +8791,7 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
             if matches!(existing.status, MusicJobStatus::Completed | MusicJobStatus::Failed | MusicJobStatus::Cancelled) {
                 return;
             }
-            let remote = match state.music_server.job(&job_id).await {
+            let remote = match state.music_server.job(&remote_job_id).await {
                 Ok(remote) => {
                     unreachable = 0;
                     remote
@@ -8754,7 +8817,7 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                 *started = Some((!another_job_under_way(&state, &job_id).await).then(std::time::Instant::now));
             }
             if remote.status == "done" {
-                let imported = import_completed_result(&state, &existing, &job_id).await;
+                let imported = import_completed_result(&state, &existing, &remote_job_id).await;
                 let mut jobs = state.jobs.write().await;
                 let Some(job) = jobs.get_mut(&job_id) else { return };
                 if matches!(job.status, MusicJobStatus::Cancelled) { return; }
@@ -8776,7 +8839,7 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                 return;
             }
             // a stop asked for while the engine was being polled stays a stop
-            let failure = (remote.status == "failed").then(|| engine_failure_reason(&job_id)).flatten();
+            let failure = (remote.status == "failed").then(|| engine_failure_reason(&remote_job_id)).flatten();
             if let Some(job) = state.jobs.write().await.get_mut(&job_id).filter(|job| !matches!(job.status, MusicJobStatus::Cancelled)) {
                 apply_remote_status(job, &remote.status, failure);
             }
@@ -9039,21 +9102,33 @@ async fn cancel_music_job(
         }
         return Ok(Json(job.clone()));
     }
-    let remote = state.music_server.cancel(&job_id).await.map_err(|error| {
-        api_error(StatusCode::SERVICE_UNAVAILABLE, format!("the engine did not accept the cancel: {error}"))
-    })?;
-    let failure = (remote.status == "failed").then(|| engine_failure_reason(&job_id)).flatten();
-    let mut jobs = state.jobs.write().await;
-    let job = jobs
-        .get_mut(&job_id)
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Music job was not found.".into()))?;
-    apply_remote_status(job, &remote.status, failure);
-    stop_on_request(job);
-    // kept at once: a studio closed right after the stop must not start the song again
-    if let Err(error) = state.library.set_music_job_status(&job_id, job_status_name(&job.status), &job.message) {
-        eprintln!("[ERROR] the stopped song's state could not be kept: {error:#}");
+    if let Some(remote_id) = existing.remote_job_id.as_deref() {
+        let remote = state.music_server.cancel(remote_id).await.map_err(|error| {
+            api_error(StatusCode::SERVICE_UNAVAILABLE, format!("the engine did not accept the cancel: {error}"))
+        })?;
+        let failure = (remote.status == "failed").then(|| engine_failure_reason(remote_id)).flatten();
+        let mut jobs = state.jobs.write().await;
+        let job = jobs
+            .get_mut(&job_id)
+            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Music job was not found.".into()))?;
+        apply_remote_status(job, &remote.status, failure);
+        stop_on_request(job);
+        if let Err(error) = state.library.set_music_job_status(&job_id, job_status_name(&job.status), &job.message) {
+            eprintln!("[ERROR] the stopped song's state could not be kept: {error:#}");
+        }
+        Ok(Json(job.clone()))
+    } else {
+        // Job has not reached yue-server yet; cancel immediately in local queue
+        let mut jobs = state.jobs.write().await;
+        let job = jobs
+            .get_mut(&job_id)
+            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Music job was not found.".into()))?;
+        stop_on_request(job);
+        if let Err(error) = state.library.set_music_job_status(&job_id, job_status_name(&job.status), &job.message) {
+            eprintln!("[ERROR] the stopped song's state could not be kept: {error:#}");
+        }
+        Ok(Json(job.clone()))
     }
-    Ok(Json(job.clone()))
 }
 
 /// The engine ends a cancelled job at its next checkpoint, and a job that has
@@ -9818,6 +9893,7 @@ fn queued_not_configured_job(request: CreateMusicJobRequest, engine_id: String) 
         params: None,
         playlist_id: None,
         laid: None,
+        remote_job_id: None,
     }
 }
 
@@ -9845,6 +9921,7 @@ fn failed_request_job(request: CreateMusicJobRequest, engine_id: String, error: 
         params: error.code().map(|_| error.params()),
         playlist_id: None,
         laid: None,
+        remote_job_id: None,
     }
 }
 
