@@ -8857,8 +8857,8 @@ fn songs_seconds(songs: &[CompletedSong]) -> f64 {
     songs.iter().filter_map(|made| made.song.metadata.get("duration_seconds").and_then(Value::as_f64)).sum()
 }
 
-async fn import_completed_result(state: &AppState, job: &MusicJob, job_id: &str) -> anyhow::Result<Vec<CompletedSong>> {
-    let result = state.music_server.result(job_id).await?;
+async fn import_completed_result(state: &AppState, job: &MusicJob, remote_job_id: &str) -> anyhow::Result<Vec<CompletedSong>> {
+    let result = state.music_server.result(remote_job_id).await?;
     let tracks = engine_result::parse_multipart_result(&result.content_type, &result.body)?;
     let profile_id = state.selected_profile_id.read().await.clone();
     // The engine's defaults fill whatever the request left out, so a stored
@@ -8935,7 +8935,7 @@ async fn import_completed_result(state: &AppState, job: &MusicJob, job_id: &str)
             }
             let acpp = state.acpp.clone();
             let progress_state = state.clone();
-            let progress_id = job_id.to_string();
+            let progress_id = job.id.clone();
             let roformer = (config.engine == separation::Engine::Roformer).then(|| (state.separator.clone(), roformer_on_card(state, config.runtime)));
             if let Some((separator, gpu)) = &roformer {
                 if !separator.roformer_installed(*gpu) {
@@ -8944,7 +8944,7 @@ async fn import_completed_result(state: &AppState, job: &MusicJob, job_id: &str)
             }
             {
                 let mut jobs = state.jobs.write().await;
-                let active = jobs.get_mut(job_id).context("the vocals-only job no longer exists")?;
+                let active = jobs.get_mut(&job.id).context("the vocals-only job no longer exists")?;
                 if matches!(active.status, MusicJobStatus::Cancelled) { anyhow::bail!("Vocals extraction cancelled"); }
                 active.status = MusicJobStatus::Running;
                 active.phase = MusicJobPhase::ExtractingVocals;
@@ -9039,7 +9039,7 @@ async fn import_completed_result(state: &AppState, job: &MusicJob, job_id: &str)
             "cover_prompt": job.cover_prompt.clone(),
             "derived": job.derived.clone(),
             // the window showing this job's card hands the card to the song
-            "job_id": job_id,
+            "job_id": job.id.clone(),
             "vocals_extraction": vocals_used_gpu.map(|used_gpu| serde_json::json!({ "used_gpu": used_gpu, "model": separation::MODEL.id })),
         });
         // Several tracks from one request share its name; number them so the
@@ -9048,7 +9048,7 @@ async fn import_completed_result(state: &AppState, job: &MusicJob, job_id: &str)
             (Some(title), count) if count > 1 => Some(format!("{title} ({})", index + 1)),
             (title, _) => title.clone(),
         };
-        if state.jobs.read().await.get(job_id).is_some_and(|active| matches!(active.status, MusicJobStatus::Cancelled)) {
+        if state.jobs.read().await.get(&job.id).is_some_and(|active| matches!(active.status, MusicJobStatus::Cancelled)) {
             anyhow::bail!("The job was cancelled before its audio reached the library");
         }
         let imported_song = state.library.import_generated_song(library::GeneratedSongInput {

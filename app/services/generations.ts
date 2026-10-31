@@ -213,12 +213,18 @@ export function useGenerations({ enabled, notify, onFinished }: GenerationOption
       playlistsChanged();
     }
     onFinished(finished.id, made);
+    remove(finished.id);
     notify(made.length > 1 ? `${made.length} ${t('tracksReady')}` : t('trackReady'), 'success');
   });
 
   const settle = useEffectEvent(async (running: Song) => {
     const jobId = running.jobId;
     if (!jobId || settling.current.has(jobId)) return;
+    if (finishedJobs.current.has(jobId)) {
+      leftEarly.current.delete(jobId);
+      remove(running.id);
+      return;
+    }
     settling.current.add(jobId);
     try {
       const job = await readJson<YueJob>(`/v1/music/jobs/${encodeURIComponent(jobId)}`);
